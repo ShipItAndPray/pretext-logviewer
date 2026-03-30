@@ -121,9 +121,17 @@
     <div id="viewer" style="height: calc(100vh - 160px);"></div>
   </div>
 
+  <script type="importmap">
+    {
+      "imports": {
+        "react": "https://esm.sh/react@18.3.1",
+        "react/jsx-runtime": "https://esm.sh/react@18.3.1/jsx-runtime"
+      }
+    }
+  </script>
   <script type="module">
     // Framework-agnostic demo using LogViewerCore directly
-    import { LogViewerCore, stripAnsi } from '../src/index.ts';
+    import { LogViewerCore, stripAnsi } from '../dist/index.mjs';
 
     const LEVELS = ['DEBUG', 'INFO', 'INFO', 'INFO', 'WARN', 'ERROR'];
     const MESSAGES = [
