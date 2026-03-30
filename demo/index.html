@@ -1,0 +1,444 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>pretext-logviewer Demo</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0d1117;
+      color: #c9d1d9;
+      min-height: 100vh;
+    }
+    .header {
+      padding: 20px 24px;
+      border-bottom: 1px solid #21262d;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      flex-wrap: wrap;
+    }
+    .header h1 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #f0f6fc;
+    }
+    .header .badge {
+      background: #238636;
+      color: #fff;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .controls {
+      padding: 12px 24px;
+      display: flex;
+      gap: 12px;
+      align-items: center;
+      flex-wrap: wrap;
+      border-bottom: 1px solid #21262d;
+    }
+    .controls button {
+      background: #21262d;
+      color: #c9d1d9;
+      border: 1px solid #30363d;
+      padding: 6px 16px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 13px;
+      transition: background 0.15s;
+    }
+    .controls button:hover { background: #30363d; }
+    .controls button.active { background: #1f6feb; border-color: #1f6feb; color: #fff; }
+    .controls label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      font-size: 13px;
+      cursor: pointer;
+    }
+    .controls input[type="checkbox"] { accent-color: #1f6feb; }
+    .stats {
+      padding: 8px 24px;
+      font-size: 12px;
+      color: #8b949e;
+      display: flex;
+      gap: 24px;
+    }
+    .stats .fps { color: #3fb950; font-weight: 600; }
+    #viewer-container {
+      padding: 0 24px 24px;
+      flex: 1;
+    }
+    .drop-zone {
+      border: 2px dashed #30363d;
+      border-radius: 8px;
+      padding: 40px;
+      text-align: center;
+      margin: 24px;
+      color: #8b949e;
+      transition: border-color 0.2s;
+    }
+    .drop-zone.dragover { border-color: #1f6feb; color: #c9d1d9; }
+  </style>
+</head>
+<body>
+  <div class="header">
+    <h1>@shipitandpray/pretext-logviewer</h1>
+    <span class="badge">v0.1.0</span>
+    <span style="font-size: 13px; color: #8b949e;">
+      Log viewer that handles 10M+ lines. ANSI colors. Instant search. Virtualized scroll.
+    </span>
+  </div>
+
+  <div class="controls">
+    <button id="btn-1k">1K lines</button>
+    <button id="btn-10k">10K lines</button>
+    <button id="btn-100k" class="active">100K lines</button>
+    <button id="btn-1m">1M lines</button>
+    <label><input type="checkbox" id="chk-wrap" /> Word Wrap</label>
+    <label><input type="checkbox" id="chk-numbers" checked /> Line Numbers</label>
+    <label><input type="checkbox" id="chk-levels" checked /> Level Badges</label>
+    <button id="btn-search">Search (Ctrl+F)</button>
+    <button id="btn-theme">Toggle Theme</button>
+    <label style="margin-left: auto;">
+      <input type="file" id="file-input" accept=".log,.txt,.gz" style="display: none;" />
+      <button id="btn-upload" style="pointer-events: none;">Upload File</button>
+    </label>
+  </div>
+
+  <div class="stats">
+    <span>Lines: <strong id="stat-lines">0</strong></span>
+    <span>Load time: <strong id="stat-load">-</strong></span>
+    <span>Scroll FPS: <strong id="stat-fps" class="fps">-</strong></span>
+    <span>Memory: <strong id="stat-mem">-</strong></span>
+  </div>
+
+  <div id="viewer-container">
+    <div id="viewer" style="height: calc(100vh - 160px);"></div>
+  </div>
+
+  <script type="module">
+    // Framework-agnostic demo using LogViewerCore directly
+    import { LogViewerCore, stripAnsi } from '../src/index.ts';
+
+    const LEVELS = ['DEBUG', 'INFO', 'INFO', 'INFO', 'WARN', 'ERROR'];
+    const MESSAGES = [
+      'Request processed successfully',
+      'Loading configuration from disk',
+      'Connection established to database',
+      'Cache miss for key user:12345',
+      'Disk usage at 87% - consider cleanup',
+      'Failed to connect to redis at 127.0.0.1:6379',
+      'Starting health check routine',
+      'Worker thread #3 completed batch processing',
+      'Rate limit exceeded for client 10.0.0.42',
+      'TLS handshake completed in 12ms',
+      'Garbage collection pause: 45ms',
+      '\x1b[32m[OK]\x1b[0m Service healthy',
+      '\x1b[1;33mWARNING:\x1b[0m Memory usage above threshold',
+      '\x1b[31mERROR:\x1b[0m Unhandled exception in request handler',
+      '\x1b[36mHTTP\x1b[0m GET /api/v2/users \x1b[32m200\x1b[0m 14ms',
+      '\x1b[36mHTTP\x1b[0m POST /api/v2/orders \x1b[33m429\x1b[0m 2ms',
+    ];
+
+    function generateLog(count) {
+      const lines = new Array(count);
+      const base = new Date('2024-01-01T00:00:00Z').getTime();
+      for (let i = 0; i < count; i++) {
+        const ts = new Date(base + i * 100).toISOString();
+        const level = LEVELS[i % LEVELS.length];
+        const msg = MESSAGES[i % MESSAGES.length];
+        lines[i] = `${ts} ${level} ${msg} [req=${(i * 7919) % 99999}]`;
+      }
+      return lines;
+    }
+
+    // State
+    let core = new LogViewerCore({
+      font: { family: 'monospace', size: 14, lineHeight: 21 },
+      wordWrap: false,
+      parseAnsi: true,
+      detectLevels: true,
+    });
+    let isDark = true;
+    let showNumbers = true;
+    let showLevels = true;
+    let searchActive = false;
+    let searchQuery = '';
+    let searchResults = [];
+    let searchIndex = 0;
+
+    const viewer = document.getElementById('viewer');
+    const statLines = document.getElementById('stat-lines');
+    const statLoad = document.getElementById('stat-load');
+    const statFps = document.getElementById('stat-fps');
+    const statMem = document.getElementById('stat-mem');
+
+    // Build the DOM structure
+    const scrollContainer = document.createElement('div');
+    scrollContainer.style.cssText = 'height:100%;overflow:auto;position:relative;background:#1e1e1e;font-family:monospace;font-size:14px;line-height:21px;color:#d4d4d4;border-radius:8px;';
+    const contentDiv = document.createElement('div');
+    contentDiv.style.cssText = 'position:relative;';
+    scrollContainer.appendChild(contentDiv);
+    viewer.appendChild(scrollContainer);
+
+    // Search bar
+    const searchBar = document.createElement('div');
+    searchBar.style.cssText = 'display:none;position:absolute;top:8px;right:16px;z-index:10;background:#2d2d2d;border:1px solid #555;border-radius:4px;padding:4px 8px;display:none;align-items:center;gap:6px;font-size:13px;';
+    searchBar.innerHTML = `
+      <input type="text" id="search-input" placeholder="Search..." style="background:#1e1e1e;border:1px solid #444;color:#eee;padding:2px 8px;border-radius:3px;outline:none;width:220px;" />
+      <span id="search-count" style="min-width:60px;text-align:center;color:#999;">0 results</span>
+      <button id="search-prev" style="background:none;border:none;color:#ccc;cursor:pointer;font-size:14px;">&#9650;</button>
+      <button id="search-next" style="background:none;border:none;color:#ccc;cursor:pointer;font-size:14px;">&#9660;</button>
+      <button id="search-close" style="background:none;border:none;color:#ccc;cursor:pointer;font-size:14px;">&#10005;</button>
+    `;
+    scrollContainer.style.position = 'relative';
+    viewer.style.position = 'relative';
+    viewer.appendChild(searchBar);
+
+    // FPS counter
+    let frameCount = 0;
+    let lastFpsTime = performance.now();
+    function updateFps() {
+      frameCount++;
+      const now = performance.now();
+      if (now - lastFpsTime >= 1000) {
+        statFps.textContent = frameCount + ' fps';
+        frameCount = 0;
+        lastFpsTime = now;
+      }
+      requestAnimationFrame(updateFps);
+    }
+    requestAnimationFrame(updateFps);
+
+    // Memory
+    function updateMemory() {
+      if (performance.memory) {
+        const mb = (performance.memory.usedJSHeapSize / 1024 / 1024).toFixed(1);
+        statMem.textContent = mb + ' MB';
+      } else {
+        statMem.textContent = 'N/A';
+      }
+    }
+    setInterval(updateMemory, 2000);
+    updateMemory();
+
+    // Rendering
+    const LEVEL_COLORS = {
+      DEBUG: '#6b7280', INFO: '#3b82f6', WARN: '#f59e0b', ERROR: '#ef4444', FATAL: '#dc2626',
+    };
+
+    function renderLine(line, offset) {
+      const div = document.createElement('div');
+      div.style.cssText = `position:absolute;top:${offset}px;left:0;right:0;display:flex;padding:0 8px;white-space:pre-wrap;word-break:break-all;`;
+
+      if (showNumbers) {
+        const num = document.createElement('span');
+        num.style.cssText = 'display:inline-block;min-width:50px;text-align:right;padding-right:12px;color:#6b7280;user-select:none;flex-shrink:0;';
+        num.textContent = String(line.number);
+        div.appendChild(num);
+      }
+
+      if (showLevels && line.level) {
+        const badge = document.createElement('span');
+        badge.style.cssText = `display:inline-block;width:48px;text-align:center;font-size:0.75em;font-weight:600;color:#fff;background:${LEVEL_COLORS[line.level.toUpperCase()] || '#6b7280'};border-radius:3px;margin-right:8px;flex-shrink:0;line-height:1.5em;`;
+        badge.textContent = line.level.toUpperCase();
+        div.appendChild(badge);
+      }
+
+      const content = document.createElement('span');
+      content.style.flex = '1';
+      for (const seg of line.segments) {
+        const span = document.createElement('span');
+        if (seg.color) span.style.color = seg.color;
+        if (seg.bgColor) span.style.backgroundColor = seg.bgColor;
+        if (seg.bold) span.style.fontWeight = 'bold';
+        if (seg.italic) span.style.fontStyle = 'italic';
+        if (seg.underline) span.style.textDecoration = 'underline';
+        if (seg.dim) span.style.opacity = '0.5';
+        span.textContent = seg.text;
+        content.appendChild(span);
+      }
+      div.appendChild(content);
+      return div;
+    }
+
+    function render() {
+      const range = core.getVisibleRange(scrollContainer.scrollTop, scrollContainer.clientHeight);
+      contentDiv.style.height = core.getTotalHeight() + 'px';
+
+      // Clear and re-render visible lines
+      contentDiv.innerHTML = '';
+      for (let i = 0; i < range.lines.length; i++) {
+        const lineEl = renderLine(range.lines[i], range.offsets[i]);
+        contentDiv.appendChild(lineEl);
+      }
+    }
+
+    let rafId = 0;
+    function scheduleRender() {
+      cancelAnimationFrame(rafId);
+      rafId = requestAnimationFrame(render);
+    }
+
+    scrollContainer.addEventListener('scroll', scheduleRender);
+
+    // Load lines
+    function loadLines(count) {
+      const t0 = performance.now();
+      const lines = generateLog(count);
+      core.loadLines(lines);
+      const t1 = performance.now();
+      statLines.textContent = count.toLocaleString();
+      statLoad.textContent = (t1 - t0).toFixed(0) + 'ms';
+      scrollContainer.scrollTop = 0;
+      scheduleRender();
+    }
+
+    // Button handlers
+    document.getElementById('btn-1k').addEventListener('click', () => loadLines(1000));
+    document.getElementById('btn-10k').addEventListener('click', () => loadLines(10000));
+    document.getElementById('btn-100k').addEventListener('click', () => loadLines(100000));
+    document.getElementById('btn-1m').addEventListener('click', () => loadLines(1000000));
+
+    // Active button state
+    document.querySelectorAll('.controls button[id^="btn-"]').forEach(btn => {
+      if (btn.id.startsWith('btn-1k') || btn.id.startsWith('btn-10k') || btn.id.startsWith('btn-100k') || btn.id.startsWith('btn-1m')) {
+        btn.addEventListener('click', () => {
+          document.querySelectorAll('.controls button').forEach(b => b.classList.remove('active'));
+          btn.classList.add('active');
+        });
+      }
+    });
+
+    document.getElementById('chk-wrap').addEventListener('change', (e) => {
+      core.setWordWrap(e.target.checked);
+      scheduleRender();
+    });
+
+    document.getElementById('chk-numbers').addEventListener('change', (e) => {
+      showNumbers = e.target.checked;
+      scheduleRender();
+    });
+
+    document.getElementById('chk-levels').addEventListener('change', (e) => {
+      showLevels = e.target.checked;
+      scheduleRender();
+    });
+
+    document.getElementById('btn-theme').addEventListener('click', () => {
+      isDark = !isDark;
+      scrollContainer.style.background = isDark ? '#1e1e1e' : '#ffffff';
+      scrollContainer.style.color = isDark ? '#d4d4d4' : '#1e1e1e';
+    });
+
+    // Search
+    document.getElementById('btn-search').addEventListener('click', () => {
+      searchBar.style.display = searchBar.style.display === 'flex' ? 'none' : 'flex';
+      if (searchBar.style.display === 'flex') {
+        document.getElementById('search-input').focus();
+      }
+    });
+
+    window.addEventListener('keydown', (e) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'f') {
+        e.preventDefault();
+        searchBar.style.display = 'flex';
+        document.getElementById('search-input').focus();
+      }
+    });
+
+    document.getElementById('search-input').addEventListener('input', (e) => {
+      searchQuery = e.target.value;
+      searchResults = core.search(searchQuery);
+      searchIndex = 0;
+      document.getElementById('search-count').textContent =
+        searchResults.length > 0 ? `1/${searchResults.length}` : '0 results';
+      if (searchResults.length > 0) {
+        scrollContainer.scrollTop = core.scrollToLine(searchResults[0].lineIndex);
+        scheduleRender();
+      }
+    });
+
+    document.getElementById('search-next').addEventListener('click', () => {
+      if (searchResults.length === 0) return;
+      searchIndex = (searchIndex + 1) % searchResults.length;
+      document.getElementById('search-count').textContent = `${searchIndex + 1}/${searchResults.length}`;
+      scrollContainer.scrollTop = core.scrollToLine(searchResults[searchIndex].lineIndex);
+      scheduleRender();
+    });
+
+    document.getElementById('search-prev').addEventListener('click', () => {
+      if (searchResults.length === 0) return;
+      searchIndex = (searchIndex - 1 + searchResults.length) % searchResults.length;
+      document.getElementById('search-count').textContent = `${searchIndex + 1}/${searchResults.length}`;
+      scrollContainer.scrollTop = core.scrollToLine(searchResults[searchIndex].lineIndex);
+      scheduleRender();
+    });
+
+    document.getElementById('search-close').addEventListener('click', () => {
+      searchBar.style.display = 'none';
+      searchResults = [];
+      searchQuery = '';
+      document.getElementById('search-input').value = '';
+    });
+
+    // File upload
+    const fileLabel = document.querySelector('label:has(#file-input)');
+    const uploadBtn = document.getElementById('btn-upload');
+    fileLabel.addEventListener('click', () => document.getElementById('file-input').click());
+    uploadBtn.style.pointerEvents = 'auto';
+
+    document.getElementById('file-input').addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = ev.target.result;
+        const t0 = performance.now();
+        core.loadText(text);
+        const t1 = performance.now();
+        statLines.textContent = core.getLineCount().toLocaleString();
+        statLoad.textContent = (t1 - t0).toFixed(0) + 'ms';
+        scrollContainer.scrollTop = 0;
+        scheduleRender();
+      };
+      reader.readAsText(file);
+    });
+
+    // Drag and drop
+    viewer.addEventListener('dragover', (e) => { e.preventDefault(); });
+    viewer.addEventListener('drop', (e) => {
+      e.preventDefault();
+      const file = e.dataTransfer.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const text = ev.target.result;
+        const t0 = performance.now();
+        core.loadText(text);
+        const t1 = performance.now();
+        statLines.textContent = core.getLineCount().toLocaleString();
+        statLoad.textContent = (t1 - t0).toFixed(0) + 'ms';
+        scrollContainer.scrollTop = 0;
+        scheduleRender();
+      };
+      reader.readAsText(file);
+    });
+
+    // Resize handling
+    const ro = new ResizeObserver(() => {
+      core.setContainerWidth(scrollContainer.clientWidth);
+      scheduleRender();
+    });
+    ro.observe(scrollContainer);
+
+    // Initial load
+    loadLines(100000);
+  </script>
+</body>
+</html>
