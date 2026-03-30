@@ -1,5 +1,9 @@
 # @shipitandpray/pretext-logviewer
 
+[![Live Demo](https://img.shields.io/badge/demo-live-brightgreen)](https://shipitandpray.github.io/pretext-logviewer/) [![GitHub](https://img.shields.io/github/stars/ShipItAndPray/pretext-logviewer?style=social)](https://github.com/ShipItAndPray/pretext-logviewer)
+
+> **[View Live Demo](https://shipitandpray.github.io/pretext-logviewer/)**
+
 Log viewer that handles 10M+ lines. ANSI colors. Instant search. Virtualized scroll that actually works with word-wrap.
 
 [![npm](https://img.shields.io/npm/v/@shipitandpray/pretext-logviewer)](https://www.npmjs.com/package/@shipitandpray/pretext-logviewer)
